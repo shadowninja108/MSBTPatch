@@ -280,8 +280,6 @@ namespace MSBTPatch
             long entriesLength = reader.ReadUInt32();
 
             long entryLength = reader.ReadUInt32();
-            if (entryLength != 12 && entryLength != 24)
-                throw new InvalidDataException("Offset 0x14 of ATR1 section is not 12 or 24!");
 
             Dictionary<int, Attributes> entries = new Dictionary<int, Attributes>();
 
@@ -305,11 +303,11 @@ namespace MSBTPatch
                     continue;
                 }
 
-                if (set.unk4 > 8)
-                {
-                    Console.WriteLine($"Entry {i} in ATR1 is invalid! Skipping...");
-                    break;
-                }
+               //if (set.unk4 > 8)
+               // {
+                //    Console.WriteLine($"Entry {i} in ATR1 is invalid! Skipping...");
+                //    continue;
+               // }
 
                 entries.Add(i, set);
             }
