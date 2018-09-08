@@ -91,25 +91,6 @@ namespace MSBTPatch
                 entries.Add(kv.Key, entry);
             }
 
-            /*Console.WriteLine("LBL1:");
-            foreach (KeyValuePair<long, string> kv in LBL1)
-            {
-                Console.WriteLine($"Index: {kv.Key}\nEntry: {kv.Value}\n");
-            }
-
-            Console.WriteLine("ATR1:");
-            foreach (KeyValuePair<int, Attributes> kv in ATR1)
-            {
-                Attributes a = kv.Value;
-                Console.WriteLine($"Index: {kv.Key}\nUnk1: {a.unk1}\nUnk2: {a.unk2}\nType: {a.type}\nUnk3: {a.unk3}\nUnk4: {a.unk4}\nUnk5: {a.unk5}\nUnk6: {a.unk6}\n");
-            }
-
-            Console.WriteLine("TXT2:");
-            foreach (KeyValuePair<int, string> kv in TXT2)
-            {
-                Console.WriteLine($"Index: {kv.Key}\nEntry: {kv.Value}\n");
-            }*/
-
             stream.Dispose();
 
         }
@@ -176,7 +157,9 @@ namespace MSBTPatch
             writer.WriteUInt32(0); // section size
             writer.WriteMultiple((UInt32)0, 2); // the magic of unknown shit
             writer.WriteUInt32((UInt32) entries.Count);
-            writer.WriteUInt32(0x18); // appears to be entry size. hopefully older games don't fuck up with more than they expect lol
+            // the entry length is variable, so i need to calculate it
+            uint atrEntrySize = (uint)(8 + entries[0].attributes.unk7.Length);
+            writer.WriteUInt32(atrEntrySize); 
 
             foreach (KeyValuePair<long, Entry> kv in entries)
             {
@@ -192,7 +175,7 @@ namespace MSBTPatch
             }
 
             tmp = writer.TemporarySeek(atr1size, SeekOrigin.Begin);
-            writer.WriteUInt32((UInt32)(0x18 * entries.Count + 2));
+            writer.WriteUInt32((UInt32)(atrEntrySize * entries.Count) + 8);
             tmp.Dispose();
 
             writer.WritePadding(0xAB);
@@ -202,7 +185,7 @@ namespace MSBTPatch
             writer.WriteUInt32(0); // section size
             writer.WriteMultiple((UInt32)0, 2); // unknowns
             writer.WriteUInt32((UInt32)entries.Count);
-            int entriesLength = 4 * entries.Count;
+            int txtEntrySize = 4 * entries.Count;
 
             relativeOffset = sizeof(UInt32); // number of entries
             stringBytes = 0;
@@ -213,7 +196,7 @@ namespace MSBTPatch
                 byte[] key = Encoding.Unicode.GetBytes(entry.value + '\0');
 
 
-                UInt32 offset = (UInt32)(relativeOffset + entriesLength + stringBytes);
+                UInt32 offset = (UInt32)(relativeOffset + txtEntrySize + stringBytes);
                 writer.WriteUInt32(offset);
 
                 stringBytes += key.Length;
@@ -302,12 +285,6 @@ namespace MSBTPatch
                     Console.WriteLine($"Entry {i} in ATR1 is invalid! Skipping...");
                     continue;
                 }
-
-               //if (set.unk4 > 8)
-               // {
-                //    Console.WriteLine($"Entry {i} in ATR1 is invalid! Skipping...");
-                //    continue;
-               // }
 
                 entries.Add(i, set);
             }
