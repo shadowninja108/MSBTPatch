@@ -47,7 +47,7 @@ namespace MSBTPatch
 
             Dictionary<long, string> LBL1 = null;
             Dictionary<int, Attributes> ATR1 = null;
-            Dictionary<int, string> TXT2 = null;
+            Dictionary<int, MsbtString> TXT2 = null;
 
             while (true)
             {
@@ -94,10 +94,10 @@ namespace MSBTPatch
             stream.Dispose();
 
         }
-        
+
         public void Write(Stream stream)
         {
-            BinaryDataWriter writer = new BinaryDataWriter(stream, Encoding.ASCII) { ByteOrder = ByteOrder.BigEndian};
+            BinaryDataWriter writer = new BinaryDataWriter(stream, Encoding.ASCII) { ByteOrder = ByteOrder.BigEndian };
 
             // order by id so that code works
             entries = entries.OrderBy(x => x.Key).ToDictionary(pair => pair.Key, pair => pair.Value);
@@ -110,13 +110,13 @@ namespace MSBTPatch
             writer.ByteOrder = endianness; // don't ask why i set it here
             writer.WriteUInt16(3); // only support 3 sections rn
             writer.WriteUInt16(0); // padding
-            long filesize = writer.Position; // saved for later
+            long filesizePointer = writer.Position; // saved for later
             writer.WriteUInt32(0); // filesize (filled in later)
             writer.WriteMultiple((byte)0, 10); // moar padding
 
             //LBL1 header
             writer.WriteString("LBL1");
-            long lbl1size = writer.Position; // to be overwritten
+            long lblSizePointer = writer.Position; // to be overwritten
             writer.WriteUInt32(0); // size of LBL relative to after padding
             writer.WriteMultiple((byte)0, 8); // padding
             writer.WriteUInt32(1); // number of entries (we just lump every string into one entry)
@@ -137,29 +137,29 @@ namespace MSBTPatch
                 byte[] key = Encoding.ASCII.GetBytes(entry.key);
 
                 long offset = relativeOffset + stringBytes;
-                writer.Write((byte) key.Length);
+                writer.Write((byte)key.Length);
                 writer.Write(key);
-                writer.WriteUInt32((UInt32) id);
+                writer.WriteUInt32((UInt32)id);
 
                 stringBytes++;
                 stringBytes += key.Length;
             }
 
             SeekTask tmp;
-            tmp = writer.TemporarySeek(lbl1size, SeekOrigin.Begin);
-            writer.WriteUInt32((UInt32) stringBytes + 0x1C);
+            tmp = writer.TemporarySeek(lblSizePointer, SeekOrigin.Begin);
+            writer.WriteUInt32((UInt32)stringBytes + 0x1C);
             tmp.Dispose();
 
             writer.WritePadding(0xAB);
 
             writer.WriteString("ATR1");
-            long atr1size = writer.Length;
+            long atrSizePointer = writer.Length;
             writer.WriteUInt32(0); // section size
             writer.WriteMultiple((UInt32)0, 2); // the magic of unknown shit
-            writer.WriteUInt32((UInt32) entries.Count);
+            writer.WriteUInt32((UInt32)entries.Count);
             // the entry length is variable, so i need to calculate it
             uint atrEntrySize = (uint)(8 + entries[0].attributes.unk7.Length);
-            writer.WriteUInt32(atrEntrySize); 
+            writer.WriteUInt32(atrEntrySize);
 
             foreach (KeyValuePair<long, Entry> kv in entries)
             {
@@ -174,14 +174,14 @@ namespace MSBTPatch
                 writer.WriteObject(set.unk7);
             }
 
-            tmp = writer.TemporarySeek(atr1size, SeekOrigin.Begin);
+            tmp = writer.TemporarySeek(atrSizePointer, SeekOrigin.Begin);
             writer.WriteUInt32((UInt32)(atrEntrySize * entries.Count) + 8);
             tmp.Dispose();
 
             writer.WritePadding(0xAB);
 
             writer.WriteString("TXT2");
-            long txt2size = writer.Length;
+            long txtSizePointer = writer.Length;
             writer.WriteUInt32(0); // section size
             writer.WriteMultiple((UInt32)0, 2); // unknowns
             writer.WriteUInt32((UInt32)entries.Count);
@@ -193,10 +193,9 @@ namespace MSBTPatch
             foreach (KeyValuePair<long, Entry> kv in entries)
             {
                 Entry entry = kv.Value;
-                byte[] key = Encoding.Unicode.GetBytes(entry.value + '\0');
+                byte[] key = Encoding.Unicode.GetBytes(entry.value.ToString() + '\0');
 
-
-                UInt32 offset = (UInt32)(relativeOffset + txtEntrySize + stringBytes);
+                UInt32 offset = (UInt32)(relativeOffset + (sizeof(UInt32) * entries.Count) + stringBytes);
                 writer.WriteUInt32(offset);
 
                 stringBytes += key.Length;
@@ -205,18 +204,21 @@ namespace MSBTPatch
             foreach (KeyValuePair<long, Entry> kv in entries)
             {
                 Entry entry = kv.Value;
-                byte[] key = Encoding.Unicode.GetBytes(entry.value + '\0');
+                byte[] key = Encoding.Unicode.GetBytes(entry.value.ToString() + '\0');
 
                 writer.WriteObject(key);
             }
 
-            tmp = writer.TemporarySeek(txt2size, SeekOrigin.Begin);
-            writer.WriteUInt32((UInt32)(stringBytes + relativeOffset));
+            tmp = writer.TemporarySeek(txtSizePointer, SeekOrigin.Begin);
+            writer.WriteUInt32((UInt32)(stringBytes + (sizeof(UInt32) * entries.Count) + relativeOffset));
             tmp.Dispose();
 
-            tmp = writer.TemporarySeek(filesize, SeekOrigin.Begin);
+            writer.WritePadding(0xAB);
+
+            tmp = writer.TemporarySeek(filesizePointer, SeekOrigin.Begin);
             writer.WriteUInt32((UInt32)(writer.Length));
             tmp.Dispose();
+
         }
 
         public static Dictionary<long, string> ParseLBL1(BinaryDataReader reader)
@@ -292,7 +294,7 @@ namespace MSBTPatch
             return entries;
         }
 
-        public static Dictionary<int, string> ParseTXT2(BinaryDataReader reader)
+        public static Dictionary<int, MsbtString> ParseTXT2(BinaryDataReader reader)
         {
             long size = reader.ReadUInt32();
 
@@ -303,34 +305,123 @@ namespace MSBTPatch
 
             long entriesLength = reader.ReadUInt32();
 
-            Dictionary<int, string> entries = new Dictionary<int, string>();
+            Dictionary<int, MsbtString> entries = new Dictionary<int, MsbtString>();
 
-            int emptyStrings = 0; // because satan designed this format himself
+            long[] textPositions = new long[entriesLength];
 
             for (int i = 0; i < entriesLength; i++)
+                textPositions[i] = reader.ReadUInt32() + position;
+
+            int emptyStrings = 0;
+
+            for(int i = 0; i < entriesLength; i++)
             {
-                long offset = reader.ReadUInt32();
-                long nextEntry = reader.Position;
+                long currentOffset = textPositions[i];
+                reader.Seek(currentOffset, SeekOrigin.Begin);
 
-                reader.Seek(position + offset, SeekOrigin.Begin);
+                MsbtString str = new MsbtString(reader);
 
-                string str = reader.ReadString(StringDataFormat.ZeroTerminated, Encoding.Unicode);
-
-                if (String.IsNullOrEmpty(str))
-                    emptyStrings++;
-                else
-                    entries.Add(i - emptyStrings, str);
-
-                reader.Seek(nextEntry, SeekOrigin.Begin);
+                entries.Add(i, str);
             }
 
             return entries;
         }
 
-        public struct Entry
+        public class MsbtString
         {
-            public string key, value;
+            uint[] Data;
+            Tuple<long, uint>[] opcodes;
+
+            public MsbtString(BinaryReader br)
+            {
+                List<uint> data = new List<uint>(); // opcodes make the length not always equal actual string length, so we must expect it to be less
+                List<Tuple<long, uint>> opcodeList = new List<Tuple<long, uint>>();
+
+                long start = br.BaseStream.Position;
+
+                while (true)
+                {
+                    uint c = br.ReadUInt16();
+                    data.Add(c);
+                    if (c == 0)
+                        break;
+                    if (c == 0xE)
+                    {
+                        data.Add(br.ReadUInt16());
+                        data.Add(br.ReadUInt16());
+                        uint count = br.ReadUInt16();
+                        opcodeList.Add(new Tuple<long, uint>(data.Count - 3, ((count + 4)/2)));
+                        data.Add(count);
+                        for (var i = 0; i < count / 2; i++) {
+                            byte[] b = br.ReadBytes(2);
+                            data.Add((uint)(b[0] + (b[1] << 8)));
+                        }
+                    }
+
+                    if (br.BaseStream.Position >= br.BaseStream.Length)
+                        break;
+                }
+                int finalLength = data.Count;
+                Data = data.Take(finalLength - 1).ToArray();
+                opcodes = opcodeList.ToArray();
+            }
+
+            public override string ToString()
+            {
+                StringBuilder builder = new StringBuilder();
+                for (int i = 0; i < Data.Length; i++)
+                {
+                    uint c = Data[i];
+                    if (IsPartOfOpcodeContents(i))
+                        builder.Append(Convert.ToChar(c));
+                    else
+                    {
+                        if (c == 0)
+                            builder.Append('\0');
+                        else
+                            builder.Append(Convert.ToChar(c));
+                    }
+                }
+                return builder.ToString();
+            }
+
+            public bool IsPartOfOpcode(int offset)
+            {
+                foreach(Tuple<long, uint> opcode in opcodes)
+                {
+                    long opcodeOffset = opcode.Item1;
+                    uint opcodeLength = opcode.Item2;
+                    long opcodeEnd = opcodeOffset + opcodeLength;
+                    if (opcodeOffset <= offset && offset < opcodeEnd)
+                        return true;
+                }
+                return false;
+            }
+
+            public bool IsPartOfOpcodeContents(int offset)
+            {
+                foreach (Tuple<long, uint> opcode in opcodes)
+                {
+                    long opcodeOffset = opcode.Item1 + 4;
+                    uint opcodeLength = opcode.Item2 - 4;
+                    long opcodeEnd = opcodeOffset + opcodeLength;
+                    if (opcodeOffset <= offset && offset < opcodeEnd)
+                        return true;
+                }
+                return false;
+            }
+        }
+
+        public class Entry
+        {
+            public string key;
+            public MsbtString value;
             public Attributes attributes;
+
+            public override string ToString()
+            {
+                return $"{key} : {value}";
+            }
         }
 
         public class Attributes
